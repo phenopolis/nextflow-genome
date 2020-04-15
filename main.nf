@@ -38,7 +38,7 @@ params.human_ref_base = 'Homo_sapiens_assembly19'
 params.human_ref = "${params.human_ref_base}.fasta"
 params.BQSR_known_sites = 'dbsnp_138.b37.vcf.gz Mills_and_1000G_gold_standard.indels.b37.vcf.gz Homo_sapiens_assembly19.known_indels_20120518.vcf'
 params.input = 's3://phenopolis-nextflow/fastq/*_{1,2}.fastq.gz'
-params.result = 's3://phenopolis-nextflow'
+params.outdir = 's3://phenopolis-nextflow'
 params.build = 'b37'
 
 log.info """\
@@ -186,7 +186,7 @@ Human_ref_withdict_ch = Channel.value(file("${params.gatk_bundle}/${params.human
 process '1F_ApplyBQSR' {
   memory '10 G'
   container params.gatk_docker
-  publishDir "${params.result}/bam", mode: 'copy'
+  publishDir "${params.outdir}/bam", mode: 'copy'
   input:
     tuple val(sampleId), path(input_bam), path(input_bam_index) from Sorted_bam_ch2
     path(recal_file) from bqsr_report_ch
