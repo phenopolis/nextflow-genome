@@ -27,30 +27,31 @@ Exome/b37 only for now. But will adapt for genome/38
  ref2: https://www.biostars.org/p/212136/
  */
 
- 
-params.gatk_docker= 'broadinstitute/gatk:4.1.4.1'
-params.picard_docker= 'broadinstitute/picard:2.22.3'
-params.bamOutput = 's3://phenopolis-test'
-//params.gatk_bundle = 's3://broad-references/hg19/v0'
-params.gatk_bundle = 's3://phenopolis-nextflow/gatk_bundle'
-params.gatk_options = "-Djava.io.tmpdir=."
-params.human_ref_base = 'Homo_sapiens_assembly19'
-params.human_ref = "${params.human_ref_base}.fasta"
-params.BQSR_known_sites = 'dbsnp_138.b37.vcf.gz Mills_and_1000G_gold_standard.indels.b37.vcf.gz Homo_sapiens_assembly19.known_indels_20120518.vcf'
-params.input = 's3://phenopolis-nextflow/fastq/*_{1,2}.fastq.gz'
-params.outdir = 's3://phenopolis-nextflow'
-params.build = 'b37'
 
 log.info """\
 C A L L I N G S  -  N F    v 1.0
 ================================
 genome   : $params.build
 """
+// determines build
+HG38 = ['hg38', 'GRCh38', 'grch38']
+HG19 = ['hg19', 'GRCh37', 'b37', 'grch37']
+human_ref_base = null
+gatk_bundle = null
+if (HG38.contains(params.build)) {
+  human_ref_base = params.human_ref_base_hg38
+  gatk_bundle = params.gatk_bundle_hg38
+  BQSR_known_sites = params.BQSR_known_sites_hg38
+} else if (HG19.contains(params.build)) {
+  human_ref_base = params.human_ref_base_hg19
+  gatk_bundle = params.gatk_bundle_hg19
+  BQSR_known_sites = params.BQSR_known_sites_hg19
+} else {
+  exit 1, "cannot understand build. Please provide either --build hg19, or --build hg38 (default is hg19)"
+}
+human_ref = "${human_ref_base}.fasta"
 Reads_ch = Channel.fromFilePairs(params.input)
-//human_refs = Channel.fromPath("${params.gatk_bundle}/Homo_sapiens_assembly19.fasta*")
-//reads = "s3://${params.cloudPath}${params.input}"
-//GATK_bundle = Channel.value(file("${params.gatk_bundle}/*"))
-Human_ref_ch = Channel.value(file("${params.gatk_bundle}/${params.human_ref}*"))
+Human_ref_ch = Channel.value(file("${gatk_bundle}/${human_ref}*"))
 
 /*
  * process 1A align
@@ -66,7 +67,7 @@ process '1A_align' {
     tuple sampleId, path("raw.bam") into Bwa_bam_ch
   
   """
-  bwa mem -K 100000000 -v 3 -t 14 -Y ${params.human_ref} ${reads} 2> >(tee bwa.stderr.log >&2) \
+  bwa mem -K 100000000 -v 3 -t 14 -Y ${human_ref} ${reads} 2> >(tee bwa.stderr.log >&2) \
     | \
 		samtools view -1 - > raw.bam
   """
@@ -150,7 +151,7 @@ process '1D_sort' {
 // Duplicate Sorted_bam_ch
 Sorted_bam_ch.into {Sorted_bam_ch1; Sorted_bam_ch2}
 // Get gatk bundle files
-GATK_ch = Channel.value(file("${params.gatk_bundle}/*"))
+GATK_ch = Channel.value(file("${gatk_bundle}/*"))
 /*
  * process 1E BQSR
  */
@@ -166,12 +167,12 @@ process '1E_BQSR' {
   """
   # -L can be given for parallelism
   # make known sites a string
-  known_site_list=(${params.BQSR_known_sites})
+  known_site_list=(${BQSR_known_sites})
   known_site_list=\$(printf " --known-sites %s" "\${known_site_list[@]}")
   known_site_list=\${known_site_list:1}
   gatk --java-options \"${params.gatk_options} -Xms4000m\" \
     BaseRecalibrator \
-      -R ${params.human_ref} \
+      -R ${human_ref} \
       -I ${input_bam} \
       --use-original-qualities \
       -O recal_data.csv \
@@ -182,7 +183,7 @@ process '1E_BQSR' {
 /*
  * process 1F Apply BQSR
  */
-Human_ref_withdict_ch = Channel.value(file("${params.gatk_bundle}/${params.human_ref_base}*"))
+Human_ref_withdict_ch = Channel.value(file("${gatk_bundle}/${human_ref_base}*"))
 process '1F_ApplyBQSR' {
   memory '10 G'
   container params.gatk_docker
@@ -198,7 +199,7 @@ process '1F_ApplyBQSR' {
   """
   gatk --java-options \"${params.gatk_options} -Xms3000m\" \
     ApplyBQSR \
-      -R ${params.human_ref} \
+      -R ${human_ref} \
       -I ${input_bam} \
       -O ${sampleId}.bqsr.bam \
       -bqsr ${recal_file} \
