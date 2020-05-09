@@ -37,12 +37,15 @@ genome   : $params.build
 HG38 = ['hg38', 'GRCh38', 'grch38']
 HG19 = ['hg19', 'GRCh37', 'b37', 'grch37']
 human_ref_base = null
+human_ref_path = null
 gatk_bundle = null
 if (HG38.contains(params.build)) {
   human_ref_base = params.human_ref_base_hg38
+  human_ref_path = params.human_ref_path_hg38
   gatk_bundle = params.gatk_bundle_hg38
   BQSR_known_sites = params.BQSR_known_sites_hg38
 } else if (HG19.contains(params.build)) {
+  human_ref_path = params.human_ref_path_hg19
   human_ref_base = params.human_ref_base_hg19
   gatk_bundle = params.gatk_bundle_hg19
   BQSR_known_sites = params.BQSR_known_sites_hg19
@@ -50,7 +53,8 @@ if (HG38.contains(params.build)) {
   exit 1, "cannot understand build. Please provide either --build hg19, or --build hg38 (default is hg19)"
 }
 human_ref = "${human_ref_base}.fasta"
-Human_ref_ch = Channel.value(file("${gatk_bundle}/${human_ref}*"))
+bwa_human_ref_bundle = "'${human_ref}' '${human_ref}.fai' '${human_ref}.pac' '${human_ref_base}.dict' '${human_ref}.amb' '${human_ref}.ann' '${human_ref}.bwt' '${human_ref}.sa'"
+human_ref_bundle = "'${human_ref}' '${human_ref}.fai' '${human_ref}.pac' '${human_ref_base}.dict' '${human_ref}.amb' '${human_ref}.ann'"
 
 // get input channel from input table
 Channel
@@ -62,29 +66,37 @@ Channel
  * process 1A align
  */
 process '1A_align' {
+  // needs a way to throw an error if there's something wrong with bwa
   cpus 20
   memory '30 G'
   tag "$sampleId"
+  label 'small_batch'
   container params.align_docker
   input:
     tuple val(sampleId), val(read1), val(read2) from Reads_ch
-    file '*' from Human_ref_ch
   
   output:
     tuple sampleId, path("raw.bam") into Bwa_bam_ch
   
   """
-  # deal with aws profile
-  profile=${params.fastq_path_profile}
-  [ "\$profile" = default ] && profile=
-  [[ \$profile ]] && profile="--profile \$profile"
-  /home/ec2-user/miniconda/bin/aws s3 cp \$profile ${params.fastq_path}/${read1} .
-  /home/ec2-user/miniconda/bin/aws s3 cp \$profile ${params.fastq_path}/${read2} .
+  set -e
+  source s3.bash
+  # copy human_ref
+  aws_profile="${params.aws_ref_profile}"
+  for downfile in ${bwa_human_ref_bundle}
+  do
+    nxf_s3_retry nxf_s3_download ${human_ref_path}/\$downfile ./\$downfile
+  done
+  # copy fastq
+  aws_profile="${params.fastq_path_profile}"
+  nxf_s3_retry nxf_s3_download ${params.fastq_path}/${read1} ./${read1}
+  nxf_s3_retry nxf_s3_download ${params.fastq_path}/${read2} ./${read2}
   bwa mem -K 100000000 -v 3 -t 20 -Y ${human_ref} ${read1} ${read2} 2> >(tee bwa.stderr.log >&2) \
     | \
-		samtools view -1 - > raw.bam
+  samtools view -1 - > raw.bam
   """
 }
+
 /*
  * process 1B mark duplicate
  */
@@ -132,7 +144,7 @@ process '1C_addGroup' {
     RGLB=unknown \
     RGPL=Illumina \
     RGPU=1 \
-    RGSM=unknown \
+    RGSM=$sampleId \
     VALIDATION_STRINGENCY=SILENT
   """
 }
@@ -167,7 +179,7 @@ process '1D_sort' {
 // Duplicate Sorted_bam_ch
 Sorted_bam_ch.into {Sorted_bam_ch1; Sorted_bam_ch2}
 // Get gatk bundle files
-GATK_ch = Channel.value(file("${gatk_bundle}/*"))
+
 /*
  * process 1E BQSR
  */
@@ -177,11 +189,30 @@ process '1E_BQSR' {
   container params.gatk_docker
   input:
     tuple val(sampleId), path(input_bam), path(input_bam_index) from Sorted_bam_ch1
-    file '*' from GATK_ch
   output:
     path("recal_data.csv") into bqsr_report_ch
   
   """
+  source s3.bash
+  # copy known_sites
+  aws_profile=""
+  for downfile in ${BQSR_known_sites}
+  do
+    nxf_s3_retry nxf_s3_download ${gatk_bundle}/\$downfile ./\$downfile
+    if [[ "\$downfile" == *gz ]]
+    then
+      nxf_s3_retry nxf_s3_download ${gatk_bundle}/\${downfile}.tbi ./\${downfile}.tbi
+    elif [[ "\$downfile" == *vcf ]]
+    then
+      nxf_s3_retry nxf_s3_download ${gatk_bundle}/\${downfile}.idx ./\${downfile}.idx
+    fi
+  done
+  # copy human_ref
+  aws_profile="${params.aws_ref_profile}"
+  for downfile in ${human_ref_bundle}
+  do
+    nxf_s3_retry nxf_s3_download ${human_ref_path}/\$downfile ./\$downfile
+  done
   # -L can be given for parallelism
   # make known sites a string
   known_site_list=(${BQSR_known_sites})
@@ -200,21 +231,27 @@ process '1E_BQSR' {
 /*
  * process 1F Apply BQSR
  */
-Human_ref_withdict_ch = Channel.value(file("${gatk_bundle}/${human_ref_base}*"))
+
 process '1F_ApplyBQSR' {
   tag "$sampleId"
   memory '10 G'
   container params.gatk_docker
-  publishDir "${params.outdir}/bam", mode: 'copy'
+  publishDir './bam'
   input:
     tuple val(sampleId), path(input_bam), path(input_bam_index) from Sorted_bam_ch2
     path(recal_file) from bqsr_report_ch
-    file '*' from Human_ref_withdict_ch
   
   output:
     tuple sampleId, path("${sampleId}.bqsr.bam"), path("${sampleId}.bqsr.bam.bai") into BQSR_bam_ch
   
   """
+  source s3.bash
+  # copy human_ref
+  aws_profile="${params.aws_ref_profile}"
+  for downfile in ${human_ref_bundle}
+  do
+    nxf_s3_retry nxf_s3_download ${human_ref_path}/\$downfile ./\$downfile
+  done
   gatk --java-options \"${params.gatk_options} -Xms3000m\" \
     ApplyBQSR \
       -R ${human_ref} \
@@ -226,5 +263,10 @@ process '1F_ApplyBQSR' {
       --create-output-bam-md5 \
       --use-original-qualities
   samtools index ${sampleId}.bqsr.bam
+
+  # upload
+  aws_profile="${params.output_path_profile}"
+  nxf_s3_retry nxf_s3_upload ${sampleId}.bqsr.bam ${params.output_path}/${params.cohort_name}
+  nxf_s3_retry nxf_s3_upload ${sampleId}.bqsr.bam.bai ${params.output_path}/${params.cohort_name}
   """
 }
