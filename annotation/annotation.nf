@@ -62,24 +62,29 @@ Scattered_ch = Horizontal_split_ch
 
 //cadd_files = file(params.cadd_file_list).readLines().join(' ')
 
+Scripts_ch = Channel.value(file("${baseDir}/bbin/*"))
 process 'cadd' {
   tag "${targetId}"
   cpus 4
   label 'small_batch'
-  memory '16 G'
+  memory '8 G'
   maxForks 1
-  echo true
 
   container params.cadd_docker
 
   input:
     tuple val(targetId), path(input_vcf), path(input_bed) from Scattered_ch
+    file "*" from Scripts_ch
   output:
     tuple targetId, path("${targetId}.cadd.tsv.gz") into Cadd_ch
     path("${targetId}.cadd.tsv.gz.tbi") into CaddIndex_ch
 
+  when:
+    targetId == 'exome_target_00'
+
   """
   source s3.bash
+  source cadd_download_helper.sh
   # copy CADD annotation locally using tabix for the files in the `files_tobe_tabix_download`,
   # and copy straight if not
   # copy to /cadd/data
@@ -95,13 +100,47 @@ process 'cadd' {
   end=\$(( \${end}+${params.input_padding} ))
   tabix_files=(${params.cadd_files_tobe_tabix_download})
   aws_profile="${params.aws_cadd_profile}"
+
+  # download annotation database
+  downloads=()
+
+  # download model
+  mkdir -p /cadd/data/${params.cadd_model}
+  downloads+=("nxf_s3_download ${params.cadd_base_path}/${params.cadd_model} /cadd/data/${params.cadd_model}")
+
+  # download all annotations apart from vep and those in tabix_files
   # make exclusive list
   exclusion=\$(printf ' --exclude "%s*"' "\${tabix_files[@]}")
-  exclusion=\${exclusion:1}
-  echo \$exclusion
-  nxf_s3_retry nxf_s3_download ${params.cadd_base_path} /cadd/data \$exclusion
+  exclusion+=' --exclude "${params.cadd_vep_path}/*"'
+  downloads+=("nxf_s3_retry nxf_s3_download ${params.cadd_base_path} /cadd/data \$exclusion")
 
-  downloads=()
+  # download relevant files in vep
+  vep_files=\$(aws s3 ls ${params.aws_cadd_profile} ${params.cadd_base_path}/${params.cadd_vep_path}/\${chrom}/ | awk '{print \$4'})
+  for vep_file in \${vep_files[@]}
+  do
+    is_overlap=\$(overlap \$start \$end \${vep_file})
+    if [ \${is_overlap} -eq 1 ]; then
+        source="${params.cadd_base_path}/${params.cadd_vep_path}/\${chrom}/\$vep_file"
+        target="/cadd/data/${params.cadd_vep_path}/\${chrom}/\$vep_file"
+        target_dir=\$(dirname "\${target}")
+        mkdir -p \${target_dir}
+        downloads+=("nxf_s3_retry nxf_s3_download \${source} \${target}")
+    fi
+  done
+  
+  # download rest of vep files not in the vep_chrom list
+  vep_chroms=(${params.cadd_vep_chromosomes})
+  pattern=\$(printf 'PRE %s/\\|' "\${vep_chroms[@]}") 
+  pattern=\${pattern%\\\\|}
+  inclusion=(\$(/home/ec2-user/miniconda/bin/aws s3 ls ${params.aws_cadd_profile} ${params.cadd_base_path}/${params.cadd_vep_path}/ | grep -v "\$pattern" | awk '{print \$NF}'))
+  inclusion=(\$(printf "${params.cadd_vep_path}/%s " "\${inclusion[@]}"))
+  mkdir -p /cadd/data/${params.cadd_vep_path}
+  for include in \${inclusion[@]}
+  do
+    downloads+=("nxf_s3_retry nxf_s3_download ${params.cadd_base_path}/\${include} /cadd/data/\${include}")
+  done
+
+  # tabix the tabixable big files
   for file in \${tabix_files[@]}
   do
     source=${params.cadd_base_path}/\${file}
@@ -109,12 +148,20 @@ process 'cadd' {
     target_dir=\$(dirname "\${target}")
     mkdir -p \$target_dir
     # some files have the same basename, which produces confusing error message at bgzip
-    downloads+=("cd \$target_dir && HTS_S3_HOST=s3.eu-central-1.wasabisys.com AWS_PROFILE=wasabi tabix -h \$source \${chrom}:\${start}-\${end} | bgzip -c > \${target} && tabix -p vcf \${target} && cd \$workdir ")
+    downloads+=("cd \$target_dir && HTS_S3_HOST=s3.eu-central-1.wasabisys.com AWS_PROFILE=wasabi tabix -h \$source \${chrom}:\${start}-\${end} | bgzip -c > \${target} && tabix -f -p vcf \${target} && cd \$workdir ")
   done
 
-  nxf_parallel "\${downloads[@]}"
+  # shuffle downloads since tabix will struggle
+  declare -a outarray
+  perm "\${downloads[@]}"
+
+  nxf_parallel "\${outarray[@]}"
 
   cd \${workdir}
+
+  #du -hs /cadd/data/*
+  #du -hs /cadd/data/annotations/GRCh37_v1.4/*
+  #du -hs /cadd/data/annotations/GRCh37_v1.4/vep/homo_sapiens/92_GRCh37/*
 
   # run cadd
   cadd ${params.cadd_flags} -o ${targetId}.cadd.tsv.gz ${input_vcf} && tabix -p vcf ${targetId}.cadd.tsv.gz
