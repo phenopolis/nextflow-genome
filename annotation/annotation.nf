@@ -68,7 +68,7 @@ process 'cadd' {
   cpus 4
   label 'small_batch'
   memory '8 G'
-  maxForks 1
+  maxForks 10
 
   container params.cadd_docker
 
@@ -78,9 +78,6 @@ process 'cadd' {
   output:
     tuple targetId, path("${targetId}.cadd.tsv.gz") into Cadd_ch
     path("${targetId}.cadd.tsv.gz.tbi") into CaddIndex_ch
-
-  when:
-    targetId == 'exome_target_00'
 
   """
   source s3.bash
@@ -110,12 +107,22 @@ process 'cadd' {
 
   # download all annotations apart from vep and those in tabix_files
   # make exclusive list
-  exclusion=\$(printf ' --exclude "%s*"' "\${tabix_files[@]}")
-  exclusion+=' --exclude "${params.cadd_vep_path}/*"'
-  downloads+=("nxf_s3_retry nxf_s3_download ${params.cadd_base_path} /cadd/data \$exclusion")
+  pattern=\$(printf '%s\\|' "\${tabix_files[@]}")
+  pattern="\${pattern}${params.cadd_vep_path}"
+  inclusion=\$(/home/ec2-user/miniconda/bin/aws s3 ls ${params.aws_cadd_profile} ${params.cadd_base_path}/ --recursive | grep -v "\$pattern" | awk '{print \$NF}')
+  base=\$(basename "${params.cadd_base_path}")
+  for incl in \${inclusion[@]}
+  do
+      filename=\${incl#\${base}/} 
+      source="${params.cadd_base_path}/\${filename}"
+      target="/cadd/data/\${filename}"
+      target_dir=\$(dirname "\${target}")
+      mkdir -p \$target_dir
+      downloads+=("nxf_s3_retry nxf_s3_download \${source} \${target}")
+  done
 
   # download relevant files in vep
-  vep_files=\$(aws s3 ls ${params.aws_cadd_profile} ${params.cadd_base_path}/${params.cadd_vep_path}/\${chrom}/ | awk '{print \$4'})
+  vep_files=\$(/home/ec2-user/miniconda/bin/aws s3 ls ${params.aws_cadd_profile} ${params.cadd_base_path}/${params.cadd_vep_path}/\${chrom}/ | awk '{print \$4'})
   for vep_file in \${vep_files[@]}
   do
     is_overlap=\$(overlap \$start \$end \${vep_file})
@@ -159,9 +166,9 @@ process 'cadd' {
 
   cd \${workdir}
 
-  #du -hs /cadd/data/*
-  #du -hs /cadd/data/annotations/GRCh37_v1.4/*
-  #du -hs /cadd/data/annotations/GRCh37_v1.4/vep/homo_sapiens/92_GRCh37/*
+  du -hs /cadd/data/*
+  du -hs /cadd/data/annotations/GRCh37_v1.4/*
+  du -hs /cadd/data/annotations/GRCh37_v1.4/vep/homo_sapiens/92_GRCh37/*
 
   # run cadd
   cadd ${params.cadd_flags} -o ${targetId}.cadd.tsv.gz ${input_vcf} && tabix -p vcf ${targetId}.cadd.tsv.gz
