@@ -33,7 +33,11 @@ nxf_s3_retry() {
       err=$(<${err_log})
       rm -rf ${tmp_dir}
       #err=$("$@" 3>&1 1>&2 2>&3 | tee >(cat - >&2))
-      if [[ $err = download* ]]
+      if [[ $exitCode == 0 ]]
+      then
+          #echo $err
+          break
+      elif [[ $err = download* ]]
       then
           bucket=$(echo $source | cut -d'/' -f 3)
           key=$(echo $source | cut -d'/' -f4-)
@@ -53,10 +57,6 @@ nxf_s3_retry() {
                   --range "bytes=$size-" \
                   /dev/fd/3 3>>$target
           fi
-
-      else
-          #echo $err
-          break
       fi
       sleep $timeout
       attempt=$(( attempt + 1 ))
