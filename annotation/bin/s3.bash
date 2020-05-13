@@ -33,7 +33,7 @@ nxf_s3_retry() {
       err=$(<${err_log})
       rm -rf ${tmp_dir}
       #err=$("$@" 3>&1 1>&2 2>&3 | tee >(cat - >&2))
-      if [[ $exitCode == 0 ]]
+      if [[ $errcode == 0 ]]
       then
           #echo $err
           break
@@ -57,6 +57,8 @@ nxf_s3_retry() {
                   --range "bytes=$size-" \
                   /dev/fd/3 3>>$target
           fi
+      else
+          echo "Error in download. Error code: $errcode, Error message: $err. Will retry"
       fi
       sleep $timeout
       attempt=$(( attempt + 1 ))
