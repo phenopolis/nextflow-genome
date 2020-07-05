@@ -145,26 +145,44 @@ process 'vep' {
     end=\$(tail -1 ${input_bed} | cut -f3)
     end=\$(( \${end}+${params.input_padding} ))
 
+    echo "where is gsutil"
+    ls /root/google-cloud-sdk/bin/gsutil
     downloads=()
     mkdir -p /data/.vep
+
     # human_refs
     for downfile in ${vep_human_ref_bundle}
     do
       downloads+=("nxf_s3_retry nxf_s3_download ${human_ref_path}/\$downfile ./\$downfile")
     done
+
+    # download plugin config folder (required for some plugins, such as Condel
+    mkdir -p /data/.vep/Plugins/config
+    downloads+=("nxf_s3_retry nxf_s3_download s3://vep-databases/Plugins/config/ /data/.vep/Plugins/config/")
+
     # download annotation databases
     for ind in \${!annotation_clouds[@]}
     do
       cloud=\$(printf "\${annotation_clouds[\$ind]}" "\$chrom")
-      local=\${annotation_locals[\$ind]}
-      mkdir -p \$(dirname \${local})
+      localFile=\${annotation_locals[\$ind]}
+      mkdir -p \$(dirname \${localFile})
       if [[ "\$cloud" == *gz ]]
       then
-        downloads+=("\${annotation_envs[\$ind]} tabix -h \$cloud \${chrom}:\${start}-\${end} | bgzip -c > \$local && tabix \${annotation_formats[\$ind]} \$local")
+        mkdir -p \$(dirname \${localFile})
+        if [[ "\$cloud" == gs* ]]
+        then
+          echo "this should be gnomad"
+          downloads+=("/root/google-cloud-sdk/bin/gsutil cp \${cloud} \$localFile")
+          downloads+=("/root/google-cloud-sdk/bin/gsutil cp \${cloud}.tbi \${localFile}.tbi")
+        else
+          downloads+=("nxf_s3_retry nxf_s3_download \$cloud \$localFile")
+          downloads+=("nxf_s3_retry nxf_s3_download \${cloud}.tbi \${localFile}.tbi")
+        fi
       else
-        downloads+=("nxf_s3_retry nxf_s3_download \$cloud \$local")
+        downloads+=("nxf_s3_retry nxf_s3_download \$cloud \$localFile")
       fi
     done
+
     # download plugin script
     mkdir -p /data/.vep/Plugins
     aws_profile="${params.vep_s3_profile}"
@@ -201,16 +219,22 @@ process 'vep' {
     for ind in \${!plugin_clouds[@]}
     do
       cloud=\${plugin_clouds[\$ind]}
-      local=\${plugin_locals[\$ind]}
+      localFile=\${plugin_locals[\$ind]}
       if [[ "\$cloud" == *gz ]]
       then
-        mkdir -p \$(dirname \${local})
-        comm="\${plugin_envs[\$ind]} tabix -h \$cloud \${chrom}:\${start}-\${end} | bgzip -c > \$local && tabix \${plugin_formats[\$ind]} \$local"
-        downloads+=("\$comm")
+        mkdir -p \$(dirname \${localFile})
+        if [[ "\$cloud" == gs* ]]
+        then
+          downloads+=("/root/google-cloud-sdk/bin/gsutil cp \${cloud} \$localFile")
+          downloads+=("/root/google-cloud-sdk/bin/gsutil cp \${cloud}.tbi \${localFile}.tbi")
+        else
+          downloads+=("nxf_s3_retry nxf_s3_download \$cloud \$localFile")
+          downloads+=("nxf_s3_retry nxf_s3_download \${cloud}.tbi \${localFile}.tbi")
+        fi
       elif [ ! -z "\$cloud" ]
       then
-        mkdir -p \$(dirname \${local})
-        downloads+=("nxf_s3_retry nxf_s3_download \$cloud \$local")
+        mkdir -p \$(dirname \${localFile})
+        downloads+=("nxf_s3_retry nxf_s3_download \$cloud \$localFile")
       fi
     done
 
@@ -250,6 +274,7 @@ process 'vep' {
       [[ \${any_entry} == 1 ]] && annotations="\${annotations} --custom \${localfile},\${annotation_annotations[\$ind]}"
     done
     annotations="\${annotations} --custom ${input_vcf},input,vcf,exact,0,${params.SELF_INFO_FIELDS}"
+    ls -l /data/.vep/dbs/gnomad/
 
     vep -i ${input_vcf} ${params.vep_flags} --fork ${params.vep_threads} --dir /data/.vep --dir_cache /data/.vep --fasta ${human_ref} -a ${params.build} \$annotations \$plugins -o ${targetId}.vep.json
     
