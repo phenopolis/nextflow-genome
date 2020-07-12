@@ -118,6 +118,7 @@ process 'vep' {
     annotation_annotations=(${annotation_annotations})
 
     aws_profile="${params.aws_ref_profile}"
+    downloads=()
 
     # human_refs
     for downfile in ${vep_human_ref_bundle}
