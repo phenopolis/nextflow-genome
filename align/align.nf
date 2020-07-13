@@ -83,14 +83,17 @@ process '1A_align' {
   source s3.bash
   # copy human_ref
   aws_profile="${params.aws_ref_profile}"
+  downloads=()
   for downfile in ${bwa_human_ref_bundle}
   do
-    nxf_s3_retry nxf_s3_download ${human_ref_path}/\$downfile ./\$downfile
+    downloads+=("nxf_s3_retry nxf_s3_download ${human_ref_path}/\$downfile ./\$downfile")
   done
   # copy fastq
   aws_profile="${params.fastq_path_profile}"
-  nxf_s3_retry nxf_s3_download ${params.fastq_path}/${read1} ./${read1}
-  nxf_s3_retry nxf_s3_download ${params.fastq_path}/${read2} ./${read2}
+  downloads+=("nxf_s3_retry nxf_s3_download ${params.fastq_path}/${read1} ./${read1}")
+  downloads+=("nxf_s3_retry nxf_s3_download ${params.fastq_path}/${read2} ./${read2}")
+  nxf_parallel "\${downloads[@]}"
+
   bwa mem -K 100000000 -v 3 -t 20 -Y ${human_ref} ${read1} ${read2} 2> >(tee bwa.stderr.log >&2) \
     | \
   samtools view -1 - > raw.bam
@@ -104,6 +107,7 @@ process '1B_mark_duplicate' {
   tag "$sampleId"
   memory '20 GB'
   container params.gatk_docker
+  cpus 4
   containerOptions '-m 14g'
   input:
     tuple val(sampleId), path(input_bam) from Bwa_bam_ch
@@ -196,23 +200,27 @@ process '1E_BQSR' {
   source s3.bash
   # copy known_sites
   aws_profile=""
+  downloads=()
   for downfile in ${BQSR_known_sites}
   do
-    nxf_s3_retry nxf_s3_download ${gatk_bundle}/\$downfile ./\$downfile
+    downloads+=("nxf_s3_retry nxf_s3_download ${gatk_bundle}/\$downfile ./\$downfile")
     if [[ "\$downfile" == *gz ]]
     then
-      nxf_s3_retry nxf_s3_download ${gatk_bundle}/\${downfile}.tbi ./\${downfile}.tbi
+      downloads+=("nxf_s3_retry nxf_s3_download ${gatk_bundle}/\${downfile}.tbi ./\${downfile}.tbi")
     elif [[ "\$downfile" == *vcf ]]
     then
-      nxf_s3_retry nxf_s3_download ${gatk_bundle}/\${downfile}.idx ./\${downfile}.idx
+      downloads+=("nxf_s3_retry nxf_s3_download ${gatk_bundle}/\${downfile}.idx ./\${downfile}.idx")
     fi
   done
+  nxf_parallel "\${downloads[@]}"
   # copy human_ref
   aws_profile="${params.aws_ref_profile}"
   for downfile in ${human_ref_bundle}
   do
-    nxf_s3_retry nxf_s3_download ${human_ref_path}/\$downfile ./\$downfile
+    downloads+=("nxf_s3_retry nxf_s3_download ${human_ref_path}/\$downfile ./\$downfile")
   done
+  nxf_parallel "\${downloads[@]}"
+
   # -L can be given for parallelism
   # make known sites a string
   known_site_list=(${BQSR_known_sites})
@@ -236,7 +244,7 @@ process '1F_ApplyBQSR' {
   tag "$sampleId"
   memory '10 G'
   container params.gatk_docker
-  publishDir './bam'
+  //publishDir './bam'
   input:
     tuple val(sampleId), path(input_bam), path(input_bam_index) from Sorted_bam_ch2
     path(recal_file) from bqsr_report_ch
@@ -248,10 +256,12 @@ process '1F_ApplyBQSR' {
   source s3.bash
   # copy human_ref
   aws_profile="${params.aws_ref_profile}"
+  downloads=()
   for downfile in ${human_ref_bundle}
   do
-    nxf_s3_retry nxf_s3_download ${human_ref_path}/\$downfile ./\$downfile
+    downloads+=("nxf_s3_retry nxf_s3_download ${human_ref_path}/\$downfile ./\$downfile")
   done
+  nxf_parallel "\${downloads[@]}"
   gatk --java-options \"${params.gatk_options} -Xms3000m\" \
     ApplyBQSR \
       -R ${human_ref} \
@@ -264,9 +274,24 @@ process '1F_ApplyBQSR' {
       --use-original-qualities
   samtools index ${sampleId}.bqsr.bam
 
+  """
+}
+
+process '1G_upload' {
+  tag "$sampleId"
+  memory '4 G'
+  container params.align_docker
+  input:
+    tuple sampleId, path(input_bam), path(input_bam_index) from BQSR_bam_ch
+
+  """
+  source s3.bash
   # upload
   aws_profile="${params.output_path_profile}"
-  nxf_s3_retry nxf_s3_upload ${sampleId}.bqsr.bam ${params.output_path}/${params.cohort_name}
-  nxf_s3_retry nxf_s3_upload ${sampleId}.bqsr.bam.bai ${params.output_path}/${params.cohort_name}
+  uploads=()
+  uploads+=("nxf_s3_retry nxf_s3_upload ${sampleId}.bqsr.bam ${params.output_path}/${params.cohort_name}")
+  uploads+=("nxf_s3_retry nxf_s3_upload ${sampleId}.bqsr.bam.bai ${params.output_path}/${params.cohort_name}")
+  nxf_parallel "\${uploads[@]}"
+  #/home/ec2-user/miniconda/bin/aws s3 cp \$aws_profile ${sampleId}.bqsr.bam.bai ${params.output_path}/${params.cohort_name}
   """
 }
