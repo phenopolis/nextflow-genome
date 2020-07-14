@@ -123,8 +123,6 @@ process 'vep' {
     tuple val(targetId), path(input_vcf), path(input_bed), path(input_cadd), path(cadd_index) from Vep_in_ch
   output:
     path "${targetId}.vep.json" into Vep_ch
-  when:
-    targetId == 'exome_target_00'
 
   script:
     def plugin_names = '"' + PLUGIN_NAMES.join('" "') + '"'

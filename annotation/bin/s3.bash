@@ -29,7 +29,6 @@ nxf_s3_retry() {
       err_log=${tmp_dir}/err.log
       eval "${all[@]}" 2>${err_log}
       errcode=$?
-      echo "error code is ${errcode}"
       err=$(<${err_log})
       rm -rf ${tmp_dir}
       #err=$("$@" 3>&1 1>&2 2>&3 | tee >(cat - >&2))
@@ -46,9 +45,6 @@ nxf_s3_retry() {
           if [ -f $target ]
           then
               echo "retrying---"
-              echo $source
-              echo $bucket
-              echo $key
               size=$(stat --printf="%s" $target)
               /home/ec2-user/miniconda/bin/aws s3api get-object\
                   $aws_profile \
@@ -67,34 +63,27 @@ nxf_s3_retry() {
 }
 
 nxf_s3_download() {
-    echo "in download"
     local source=$1
     local target=$2
     local all=("$@")
-    echo "${all[@]}"
     local file_name=$(basename ${source})
+    echo "will download"
+    echo $1
+    echo $2
     #local is_dir=$(/home/ec2-user/miniconda/bin/aws $aws_profile --region eu-central-1 s3 ls $source | grep -F "PRE ${file_name}/" -c)
     cmd="/home/ec2-user/miniconda/bin/aws $aws_profile --region eu-central-1 s3 ls $source | grep -F \"PRE ${file_name}/\" -c"
-    echo $cmd
     local is_dir=$(eval $cmd)
     [[ $source = */ ]] && is_dir=1
-    echo $is_dir
     if [[ $is_dir == 1 ]]; then
         cmd="/home/ec2-user/miniconda/bin/aws $aws_profile --region eu-central-1 s3 sync --only-show-errors ${all[@]}"
-        echo $cmd
         eval $cmd
     elif [ ! -f $target ]; then
         bucket=$(echo $source | cut -d'/' -f 3)
         key=$(echo $source | cut -d'/' -f4-)
 
-        echo $aws_profile
-        echo $bucket
-        echo $key
         cmd="/home/ec2-user/miniconda/bin/aws s3api get-object $aws_profile --bucket $bucket --key $key $target"
-        echo $cmd
         eval "$cmd"
 
-       echo "==worked=="
     fi
 }
 
@@ -108,7 +97,7 @@ nxf_parallel() {
     (
     set +u
     while ((i<${#cmd[@]})); do
-        echo "command: ${cmd[$i]}"
+        #echo "command: ${cmd[$i]}"
         local copy=()
         for x in "${pid[@]}"; do
           [[ -e /proc/$x ]] && copy+=($x) 
