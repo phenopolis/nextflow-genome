@@ -1,0 +1,11 @@
+check_interval: 900
+report_path: s3://phenopolis-nextflow/report
+bucket_dir_base: s3://phenopolis-nextflow/nextflow-work
+aws_exe: /home/ec2-user/miniconda/bin/aws
+ec2:
+    image_id: 'ami-0cd7f1e32b61796aa'
+    key_name: 'mac-spot'
+    availability_zone: 'eu-central-1'
+    security_group: 'sg-02276730bf1ae26ec'
+    instance_type: 'r5.large'
+    subnet_id: 'subnet-e9cc3ea5'
