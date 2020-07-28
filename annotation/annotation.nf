@@ -20,7 +20,10 @@ if (HG38.contains(params.build)) {
 human_ref = "${human_ref_base}.fasta"
 
 
-Channel.fromList(file(params.input_table).readLines().collect{[it, "${params.input_path}/$it/${params.input_filename}", "${params.input_path}/$it/${params.input_filename}.tbi" ] }).into {Input_ch; Vep_input_ch}
+Channel.fromPath(params.input_table)
+  .splitCsv(header:['sampleId', 'read1', 'read2'], sep:'\t')
+  .map{ row -> tuple(row.sampleId, "${params.input_path}/${row.sampleId}/${params.input_filename}",  "${params.input_path}/${row.sampleId}/${params.input_filename}.tbi") }
+  .into {Input_ch; Vep_input_ch}
 
 Bed_ch = Channel.value(file("${params.input_beds}/*.bed"))
 
@@ -125,7 +128,7 @@ process 'vep' {
   input:
     tuple val(sampleId), path(input_vcf), path(input_vcf_index), path(input_cadd), path(cadd_index) from Vep_in_ch
   output:
-    path "vep.json" into Vep_ch
+    path "vep.json.gz" into Vep_ch
 
   script:
     def plugin_names = '"' + PLUGIN_NAMES.join('" "') + '"'
@@ -184,8 +187,9 @@ process 'vep' {
     annotations="\${annotations} --custom ${input_vcf},input,vcf,exact,0,${params.SELF_INFO_FIELDS}"
 
     vep -i ${input_vcf} ${params.vep_flags} --fork ${params.vep_threads} --dir /data/.vep --dir_cache /data/.vep --fasta ${human_ref} -a ${params.build} \$annotations \$plugins -o vep.json
-
-    uploads=("nxf_s3_retry nxf_s3_upload vep.json ${params.s3_deposit}/${sampleId}")
+    
+    gzip vep.json
+    uploads=("nxf_s3_retry nxf_s3_upload vep.json.gz ${params.s3_deposit}/${sampleId}")
     aws_profile="${params.s3_deposit_profile}"
     nxf_parallel "\${uploads[@]}"
 
