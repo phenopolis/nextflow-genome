@@ -1,6 +1,7 @@
 import os
 import argparse
 import yaml
+import time
 import hashlib
 import logging
 from datetime import datetime
@@ -92,6 +93,8 @@ def main(params):
             wait = False
             if 'ERROR' in files:
                 with_error = True
+        else:
+            time.sleep(params['check_interval'])
 
     logging.info(f"job done.")
     if with_error:
