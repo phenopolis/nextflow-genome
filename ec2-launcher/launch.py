@@ -16,14 +16,14 @@ COMPONENTS = {
 
 def get_report_s3_path(params):
     now = datetime.today().strftime('%Y-%m-%d-%H-%M-%S')
-    randomiser = hashlib.sha224(param['input_table'])
+    randomiser = hashlib.sha224(params['input_table'].encode('utf-8')).hexdigest()
     return f"{params['report_path']}/{now}-{randomiser}"
 
 def main(params):
     # configure logger
     os.makedirs('./log', exist_ok=True)
     now = datetime.today().strftime('%Y-%m-%d-%H-%M-%S')
-    task_name = f"{now}-{params['input_table']}"
+    task_name = f"{now}-{params['input_table'].split('/')[-1]}"
     logfile = os.path.join('./log', f"{task_name}.log") 
     logging.basicConfig(filename=logfile, level=logging.DEBUG)
     print(f"log file: {logfile}")
@@ -32,19 +32,20 @@ def main(params):
     report_folder = get_report_s3_path(params)
     logging.info(f"report path: {report_folder}")
 
-    # user_data template
-    user_data_template = f'''#!/bin/bash
-    trap 'catch $? $LINENO' EXIT
-    catch() {
-      echo "catching!"
-      if [ "$1" != "0" ]; then
-        # error handling goes here
-        echo "Error $1 occurred on $2" > ERROR
-        {params['aws_exe']} s3 cp ERROR {report_folder}
-      fi
-    }
-    git clone https://github.com/phenopolis/nextflow-genome;
+    # startup_script 
+    startup_script = '''#!/bin/bash -e
+trap 'catch $? $LINENO' EXIT
+catch() {
+  echo "catching!"
+  if [ "$1" != "0" ]; then
+    echo "Error $1 occurred on $2" > /tmp/ERROR
     '''
+    startup_script += f"{params['aws_exe']} s3 cp /tmp/ERROR {report_folder}\n"
+    startup_script += '''
+  fi
+}
+git -C /tmp clone https://github.com/phenopolis/nextflow-genome;
+'''
 
     what_to_do = set([i.strip() for i in params['do'].split(',')])
     if len(what_to_do) == 0:
@@ -60,12 +61,33 @@ def main(params):
         # make a s3 path to put sentinel file once pipeline is finished
         component = COMPONENTS[component_index]
         bucket_dir = f"{params['bucket_dir_base']}/{task_name}/{component}"
-        user_data = user_data_template + f"cd nextflow-genome/{component}; nextflow run {component}.nf --input_table {params['input_table']} -bucket-dir {bucket_dir} -with-report {report_folder}/{component}.html;"
+        startup_script = startup_script + f"cd /tmp/nextflow-genome/{component}; nextflow run {component}.nf --input_table {params['input_table']} -bucket-dir {bucket_dir} -with-report {report_folder}/{component}.html;"
         logging.info(f"bucket-dir for {component} will be: {bucket_dir}")
 
-    user_data += f"touch DONE && {params['aws_exe']} s3 cp DONE {report_folder}"
+    startup_script += f"touch /tmp/DONE && {params['aws_exe']} s3 cp /tmp/DONE {report_folder}"
 
+    # upload startup_script to s3
+    s3_conn = boto3.client('s3')
+    bare_report_path = report_folder.lstrip('s3://')
+    bucket, prefix = bare_report_path.split('/', 1)
+    local_tmp_path = os.path.join('tmp', prefix)
+    logging.info(f"local tmp path: {local_tmp_path}")
+
+    os.makedirs(local_tmp_path, exist_ok=True)
+    startup_file = os.path.join(local_tmp_path, 'startup.sh')
+    startup_s3_file = f"{prefix}/startup.sh"
+    with open(startup_file, 'wt') as outf:
+        outf.write(startup_script)
+    s3_conn.upload_file(startup_file, bucket, startup_s3_file)
+
+    # launch instance
     ec2 = boto3.resource('ec2')
+    user_data = '''#!/bin/bash
+'''
+    user_data += f"su ec2-user -c '{params['aws_exe']} s3 cp s3://{bucket}/{startup_s3_file} /tmp/startup.sh' \n"
+    #user_data += f"su ec2-user -c '{params['aws_exe']} s3 cp s3://phenopolis-nextflow/test/launch.py /tmp/startup.sh'"
+    #user_data += 'touch /tmp/mememe'
+    user_data += "su ec2-user -c 'bash /tmp/startup.sh'"
     instance = ec2.create_instances(
       ImageId=params['ec2']['image_id'],
       MinCount=1, MaxCount=1,
@@ -81,18 +103,19 @@ def main(params):
     logging.info(f"job dispatched to {instance[0]}. You can log to it using KeyName {params['ec2']['key_name']}.")
 
     # keep an eye on report-folder
-    bare_report_path = report_folder.lstrip('s3://')
-    bucket, prefix = bare_report_path.split('/', 1)
-    s3_conn = boto3.client('s3')
     wait = True
     with_error = False
     while wait:
-        files = [i['Key'] for i in s3_conn.list_objects(Bucket=bucket, Prefix=prefix)['Contents']]
-        files = set([i.split('/')[-1] for i in files])
-        if files & set(['DONE', 'ERROR']):
-            wait = False
-            if 'ERROR' in files:
-                with_error = True
+        response = s3_conn.list_objects(Bucket=bucket, Prefix=prefix)
+        if 'Content' in response:
+            files = [i['Key'] for i in s3_conn.list_objects(Bucket=bucket, Prefix=prefix)['Contents']]
+            files = set([i.split('/')[-1] for i in files])
+            if files & set(['DONE', 'ERROR']):
+                wait = False
+                if 'ERROR' in files:
+                    with_error = True
+            else:
+                time.sleep(params['check_interval'])
         else:
             time.sleep(params['check_interval'])
 
