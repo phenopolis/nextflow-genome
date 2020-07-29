@@ -82,9 +82,9 @@ Merge_cadd_input_ch = Cadd_ch.groupTuple()
 process 'merge_cadd' {
   tag "{$sampleId}"
   cpus 1
-  //label 'small_batch'
+  label 'small_batch'
   memory '7 G'
-  //container params.vep_docker
+  container params.vep_docker
 
   input:
     tuple val(sampleId), path("*") from Merge_cadd_input_ch
