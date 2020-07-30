@@ -21,7 +21,7 @@ human_ref = "${human_ref_base}.fasta"
 
 
 Channel.fromPath(params.input_table)
-  .splitCsv(header:['sampleId', 'read1', 'read2'], sep:'\t')
+  .splitCsv(header:['sampleId', 'read1', 'read2'], sep:',')
   .map{ row -> tuple(row.sampleId, "${params.input_path}/${row.sampleId}/${params.input_filename}",  "${params.input_path}/${row.sampleId}/${params.input_filename}.tbi") }
   .into {Input_ch; Vep_input_ch}
 

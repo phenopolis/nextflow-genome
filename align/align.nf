@@ -59,7 +59,7 @@ human_ref_bundle = "'${human_ref}' '${human_ref}.fai' '${human_ref}.pac' '${huma
 // get input channel from input table
 Channel
   .fromPath(params.input_table)
-  .splitCsv(header:['sampleId', 'read1', 'read2'], sep:'\t')
+  .splitCsv(header:['sampleId', 'read1', 'read2'], sep:',')
   .map{ row -> tuple(row.sampleId, row.read1, row.read2) }
   .set{ Reads_ch }
 /*
@@ -212,7 +212,6 @@ process '1E_BQSR' {
       downloads+=("nxf_s3_retry nxf_s3_download ${gatk_bundle}/\${downfile}.idx ./\${downfile}.idx")
     fi
   done
-  nxf_parallel "\${downloads[@]}"
   # copy human_ref
   aws_profile="${params.aws_ref_profile}"
   for downfile in ${human_ref_bundle}

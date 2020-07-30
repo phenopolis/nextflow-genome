@@ -39,8 +39,10 @@ if (HG38.contains(params.build)) {
 human_ref = "${human_ref_base}.fasta"
 human_ref_all_bundle = "'${human_ref}' '${human_ref}.fai' '${human_ref}.pac' '${human_ref_base}.dict' '${human_ref}.amb' '${human_ref}.ann' '${human_ref}.bwt' '${human_ref}.sa'"
 
-// Even if Bam_ch will be used once by condition, Nextflow still complains for multiple use of the channel.
-Bam_ch = Channel.fromList(file(params.input_table).readLines())
+
+Bam_ch = Channel.fromPath(params.input_table)
+  .splitCsv(header:['sampleId', 'read1', 'read2'], sep:',')
+  .map{ row -> row.sampleId }
 interval_ch = Channel.value(file(calling_interval_list))
 
 
