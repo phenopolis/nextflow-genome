@@ -7,8 +7,10 @@ process 'Stage' {
     output:
         val true into Stage_ch
     """
-    git -C /tmp clone ${params.git_repo}
-    ${params.aws_exe} s3 cp /tmp/${params.git_repo_name} ${params.s3_repo} --recursive
+    WORK_DIR=`mktemp -d -p "/tmp"`
+    git -C \$WORK_DIR clone ${params.git_repo}
+    ${params.aws_exe} s3 cp \${WORK_DIR}/${params.git_repo_name} ${params.s3_repo} --recursive
+    rm -rf \${WORK_DIR}
     """
 }
 process 'Align' {
