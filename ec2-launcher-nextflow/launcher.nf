@@ -1,5 +1,5 @@
 to_dos = params.do.tokenize(',').join('|')
-now = Date().format( 'yyyy-MM-dd' )
+now = new Date().format( 'yyyy-MM-dd' )
 
 process 'Stage' {
     cpus 1
@@ -12,7 +12,7 @@ process 'Stage' {
     """
 }
 process 'Align' {
-    label: 'aws'
+    label 'aws'
     cpus 1
     memory '6 G'
     container params.nextflow_docker
@@ -20,7 +20,7 @@ process 'Align' {
     input:
         val stageDone from Stage_ch
     output:
-        tuple val true, path("report-align.html")  into Align_ch
+        tuple val(true), path("report-align.html")  into Align_ch
 
     """
     if [[ algin =~ ^(${to_dos})\$ ]]; then
@@ -34,7 +34,7 @@ process 'Align' {
 
 
 process 'variantCall' {
-    label: 'aws'
+    label 'aws'
     cpus 1
     memory '6 G'
     container params.nextflow_docker
@@ -42,7 +42,7 @@ process 'variantCall' {
     input:
         val alignDone from Align_ch
     output:
-        tuple val true, path("report-variantCall.html") into VariantCall_ch
+        tuple val(true), path("report-variantCall.html") into VariantCall_ch
 
     """
     if [[ variantCall =~ ^(${to_dos})\$ ]]; then
@@ -55,7 +55,7 @@ process 'variantCall' {
 }
 
 process 'annotation' {
-    label: 'aws'
+    label 'aws'
     cpus 1
     memory '6 G'
     container params.nextflow_docker
@@ -63,7 +63,7 @@ process 'annotation' {
     input:
         val variantCallDone from VariantCall_ch
     output:
-        tuple val true, path("report-annotation.html") into Annotation_ch
+        tuple val(true), path("report-annotation.html") into Annotation_ch
 
     """
     if [[ annotation =~ ^(${to_dos})\$ ]]; then
