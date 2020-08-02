@@ -4,6 +4,7 @@ from datetime import datetime
 import subprocess
 from flask import Flask, request
 from flask_cors import CORS, cross_origin
+import requests
 import yaml
 import uuid
 from threading import Thread
@@ -26,13 +27,14 @@ def launcher(params):
     cwd = os.path.dirname(os.path.realpath(__file__))
     what_to_do = set([i.strip() for i in params['do'].split(',')])
     now = datetime.today().strftime('%Y-%m-%d-%H-%M-%S')
-    report_dir = os.path.join('report', now)
+    report_dir = os.path.join(params['report_dir_base'], now)
     os.makedirs(report_dir, exist_ok=True)
     for do_what in ('align', 'variantCall', 'annotation'):
         if do_what in what_to_do:
             wd = os.path.join(cwd, '..', do_what)
-            cmd = ['nextflow', '-C', os.path.join(wd, 'nextflow.config'), '-log', f"{report_dir}/nextflow-{do_what}.log", 'run', os.path.join(wd, f'{do_what}.nf'), '--input_table', params['input_table'], '-bucket-dir', f"{params['bucket_dir_base']}/{now}/{do_what}", '-with-report', f"{report_dir}/ report-{do_what}.html", '-with-weblog', f"{params['web_log_url']}/{params['job_id']}"]
+            cmd = ['nextflow', '-C', os.path.join(wd, 'nextflow.config'), '-log', f"{report_dir}/nextflow-{do_what}.log", 'run', os.path.join(wd, f'{do_what}.nf'), '--input_table', params['input_table'], '-bucket-dir', f"{params['bucket_dir_base']}/{now}/{do_what}", '-with-report', f"{report_dir}/ report-{do_what}.html", '-with-weblog', f"{params['web_log_url']}/{params['job_id']}", "-resume"]
             subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr).communicate()
+    requests.post(f"{params['web_log_url']}/{params['job_id']}", json={'status': 'done', 'message': f"reports can be found at {report_dir}"})f"reports can be found at {report_dir}f"reports can be found at {report_dir}f"reports can be found at {report_dir}f"reports can be found at {report_dir}f"reports can be found at {report_dir}f"reports can be found at {report_dir}f"reports can be found at {report_dir}f"reports can be found at {report_dir}f"reports can be found at {report_dir}"
 
 @app.route("/run", methods = ['POST'])
 @cross_origin()
@@ -52,16 +54,12 @@ def weblog(job_id):
     if request.method == 'GET':
         if job_id not in weblogs:
             return {'status': 'fail', 'message': 'No just job_id'}
+        elif weblogs[job_id].get('status', None) == 'done':
+            return {'status': 'done', 'data': weblogs[job_id]}
         else:
-            return {'status': 'success', 'data':weblogs[job_id]}
+            return {'status': 'running', 'data':weblogs[job_id]}
     if request.method == 'POST':
         weblogs[job_id] = request.json
-        print('form')
-        print(request.form)
-        print('json')
-        print(request.json)
-        print('args')
-        print(request.args)
 
         return {'status': 'success', 'message': 'data received'}
 

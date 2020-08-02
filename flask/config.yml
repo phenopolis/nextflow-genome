@@ -1,3 +1,4 @@
 bucket_dir_base: s3://phenopolis-nextflow/nextflow-work
 port: 5000
 web_log_url: http://0.0.0.0:5000/weblog
+report_dir_base: ./report
