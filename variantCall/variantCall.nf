@@ -40,9 +40,10 @@ human_ref = "${human_ref_base}.fasta"
 human_ref_all_bundle = "'${human_ref}' '${human_ref}.fai' '${human_ref}.pac' '${human_ref_base}.dict' '${human_ref}.amb' '${human_ref}.ann' '${human_ref}.bwt' '${human_ref}.sa'"
 
 
-Bam_ch = Channel.fromPath(params.input_table)
-  .splitCsv(header:['sampleId', 'read1', 'read2'], sep:',')
-  .map{ row -> row.sampleId }
+//Bam_ch = Channel.fromPath(params.input_table)
+//  .splitCsv(header:['sampleId', 'read1', 'read2'], sep:',')
+//  .map{ row -> row.sampleId }
+Bam_ch = Channel.fromList(file(params.input_table).readLines().collect{ it -> it.tokenize(',')[0]})
 interval_ch = Channel.value(file(calling_interval_list))
 
 
@@ -114,15 +115,15 @@ process 'filterCNNVariants' {
   tag "$sampleId"
   cpus 1
   memory '20 G'
-  publishDir "${params.publish_dir}/${sampleId}"
   label 'gatk'
   container params.gatk_docker
   input:
     tuple val(sampleId), path(input_vcf) from CNN_ch
   output:
-    path("CNN.filtered.vcf.gz*") into Result_ch
+    tuple val(sampleId), path("CNN.filtered.vcf.gz"), path("CNN.filtered.vcf.gz.tbi") into Filter_ch
   
   """
+  source s3.bash
   # make resource list
   resource_list=(${params.CNN_resources_hg19})
   resource_list=\$(printf " -resource /data/gatk/%s" "\${resource_list[@]}")
@@ -134,5 +135,11 @@ process 'filterCNNVariants' {
         -info-key CNN_2D \
         --snp-tranche ${params.CNN_filter_snp_tranche} \
         --indel-tranche ${params.CNN_filter_indel_tranche}
+  # upload
+  aws_profile="${params.output_path_profile}"
+  uploads=()
+  uploads+=("nxf_s3_retry nxf_s3_upload CNN.filtered.vcf.gz ${params.output_path}/${params.cohort_name}")
+  uploads+=("nxf_s3_retry nxf_s3_upload CNN.filtered.vcf.gz.tbi ${params.output_path}/${params.cohort_name}")
+  nxf_parallel "\${uploads[@]}"
   """
 }

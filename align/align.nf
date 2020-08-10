@@ -249,7 +249,7 @@ process '1F_ApplyBQSR' {
     path(recal_file) from bqsr_report_ch
   
   output:
-    tuple sampleId, path("${sampleId}.bqsr.bam"), path("${sampleId}.bqsr.bam.bai") into BQSR_bam_ch
+    tuple sampleId, path("bqsr.bam"), path("bqsr.bam.bai") into BQSR_bam_ch
   
   """
   source s3.bash
@@ -265,32 +265,19 @@ process '1F_ApplyBQSR' {
     ApplyBQSR \
       -R ${human_ref} \
       -I ${input_bam} \
-      -O ${sampleId}.bqsr.bam \
+      -O bqsr.bam \
       -bqsr ${recal_file} \
       --static-quantized-quals 10 --static-quantized-quals 20 --static-quantized-quals 30 \
       --add-output-sam-program-record \
       --create-output-bam-md5 \
       --use-original-qualities
-  samtools index ${sampleId}.bqsr.bam
+  samtools index bqsr.bam
 
-  """
-}
-
-process '1G_upload' {
-  tag "$sampleId"
-  memory '4 G'
-  container params.align_docker
-  input:
-    tuple sampleId, path(input_bam), path(input_bam_index) from BQSR_bam_ch
-
-  """
-  source s3.bash
-  # upload
   aws_profile="${params.output_path_profile}"
   uploads=()
-  uploads+=("nxf_s3_retry nxf_s3_upload ${sampleId}.bqsr.bam ${params.output_path}/${params.cohort_name}")
-  uploads+=("nxf_s3_retry nxf_s3_upload ${sampleId}.bqsr.bam.bai ${params.output_path}/${params.cohort_name}")
+  uploads+=("nxf_s3_retry nxf_s3_upload bqsr.bam ${params.output_path}/${params.cohort_name}")
+  uploads+=("nxf_s3_retry nxf_s3_upload bqsr.bam.bai ${params.output_path}/${params.cohort_name}")
   nxf_parallel "\${uploads[@]}"
-  #/home/ec2-user/miniconda/bin/aws s3 cp \$aws_profile ${sampleId}.bqsr.bam.bai ${params.output_path}/${params.cohort_name}
   """
 }
+

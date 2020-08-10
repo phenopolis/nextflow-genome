@@ -20,9 +20,10 @@ if (HG38.contains(params.build)) {
 human_ref = "${human_ref_base}.fasta"
 
 
-Channel.fromPath(params.input_table)
-  .splitCsv(header:['sampleId', 'read1', 'read2'], sep:',')
-  .map{ row -> tuple(row.sampleId, "${params.input_path}/${row.sampleId}/${params.input_filename}",  "${params.input_path}/${row.sampleId}/${params.input_filename}.tbi") }
+//Channel.fromPath(params.input_table)
+//  .splitCsv(header:['sampleId', 'read1', 'read2'], sep:',')
+//  .map{ row -> tuple(row.sampleId, "${params.input_path}/${row.sampleId}/${params.input_filename}",  "${params.input_path}/${row.sampleId}/${params.input_filename}.tbi") }
+Channel.fromList(file(params.input_table).readLines().collect{ it -> it.tokenize(',')[0]})
   .into {Input_ch; Vep_input_ch}
 
 Bed_ch = Channel.value(file("${params.input_beds}/*.bed"))
@@ -34,19 +35,29 @@ process 'horizontal_split' {
   memory '8 G'
   container params.gatk_docker
   input:
-    tuple val(sampleId), path(input_vcf), path(input_vcf_tbi) from Input_ch
+    val(sampleId) from Input_ch
     path("*") from Bed_ch
   output:
     path("*.vcf.gz") into Horizontal_split_ch
 
   """
+  source s3.bash
+
+  aws_profile="${params.s3_deposit_profile}"
+  downloads=()
+  input_bam=
+  for filename in ${params.input_filename} ${params.input_filename}.tbi; do
+      cloudFile=${params.s3_deposit}/${sampleId}/\$filename
+      downloads+=("nxf_s3_retry nxf_s3_download \$cloudFile \$filename")
+  done
+  nxf_parallel "\${downloads[@]}"
   for bed_file in *.bed
   do
     targetName=\${bed_file%".bed"}
     chrom=\$(head -1 \${bed_file} | cut -f1)
     start=\$(head -1 \${bed_file} | cut -f2)
     end=\$(tail -1 \${bed_file} | cut -f3)
-    tabix -h ${input_vcf} \$chrom:\$start-\$end | bgzip -c > ${sampleId}.\${targetName}.vcf.gz
+    tabix -h ${params.input_filename} \$chrom:\$start-\$end | bgzip -c > ${sampleId}.\${targetName}.vcf.gz
   done
   """
 }
@@ -126,7 +137,7 @@ process 'vep' {
   publishDir '.'
 
   input:
-    tuple val(sampleId), path(input_vcf), path(input_vcf_index), path(input_cadd), path(cadd_index) from Vep_in_ch
+    tuple val(sampleId), path(input_cadd), path(cadd_index) from Vep_in_ch
   output:
     path "vep.json.gz" into Vep_ch
 
@@ -154,6 +165,11 @@ process 'vep' {
     for downfile in ${vep_human_ref_bundle}
     do
       downloads+=("nxf_s3_retry nxf_s3_download ${human_ref_path}/\$downfile ./\$downfile")
+    done
+    # vcf input
+    for filename in ${params.input_filename} ${params.input_filename}.tbi; do
+      cloudFile=${params.s3_deposit}/${sampleId}/\$filename
+      downloads+=("nxf_s3_retry nxf_s3_download \$cloudFile \$filename")
     done
 
     nxf_parallel "\${downloads[@]}"
@@ -184,9 +200,9 @@ process 'vep' {
       localfile=\${annotation_locals[\$ind]}
       annotations="\${annotations} --custom \${localfile},\${annotation_annotations[\$ind]}"
     done
-    annotations="\${annotations} --custom ${input_vcf},input,vcf,exact,0,${params.SELF_INFO_FIELDS}"
+    annotations="\${annotations} --custom ${params.input_filename},input,vcf,exact,0,${params.SELF_INFO_FIELDS}"
 
-    vep -i ${input_vcf} ${params.vep_flags} --fork ${params.vep_threads} --dir /data/.vep --dir_cache /data/.vep --fasta ${human_ref} -a ${params.build} \$annotations \$plugins -o vep.json
+    vep -i ${params.input_filename} ${params.vep_flags} --fork ${params.vep_threads} --dir /data/.vep --dir_cache /data/.vep --fasta ${human_ref} -a ${params.build} \$annotations \$plugins -o vep.json
     
     gzip vep.json
     uploads=("nxf_s3_retry nxf_s3_upload vep.json.gz ${params.s3_deposit}/${sampleId}")
