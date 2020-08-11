@@ -139,7 +139,7 @@ process 'vep' {
   input:
     tuple val(sampleId), path(input_cadd), path(cadd_index) from Vep_in_ch
   output:
-    path "vep.json.gz" into Vep_ch
+    tuple sampleId, path "vep.json" into Vep_ch
 
   script:
     def plugin_names = '"' + PLUGIN_NAMES.join('" "') + '"'
@@ -204,13 +204,34 @@ process 'vep' {
 
     vep -i ${params.input_filename} ${params.vep_flags} --fork ${params.vep_threads} --dir /data/.vep --dir_cache /data/.vep --fasta ${human_ref} -a ${params.build} \$annotations \$plugins -o vep.json
     
-    gzip vep.json
+    gzip -c vep.json > vep.json.gz
     uploads=("nxf_s3_retry nxf_s3_upload vep.json.gz ${params.s3_deposit}/${sampleId}")
     aws_profile="${params.s3_deposit_profile}"
     nxf_parallel "\${uploads[@]}"
 
-
     """
-
 }
 
+process 'hom_het' {
+  tag "${sampleId}"
+  cpus 4
+  label 'small_batch'
+  memory '8 G'
+  container params.python_docker
+  input:
+    tuple val(sampleId), path(in_json) into Vep_ch
+  
+  """
+  cat ${in_json} | python /script/vepjson2tsv.py \
+    | tee >(grep '^>HOM:' | sed 's/^>HOM://' > HOM.tsv ) \
+    >(grep '^>HET:' | sed 's/^>HET://' > HET.tsv ) \
+    >(grep '^>VAR:' | sed 's/^>VAR://' > VAR.tsv)
+
+  uploads=()
+  for f in HOM.tsv HET.tsv VAR.tsv; do
+    uploads+=("nxf_s3_retry nxf_s3_upload \$f ${params.s3_deposit}/${sampleId}")
+  done
+  aws_profile="${params.s3_deposit_profile}"
+  nxf_parallel "\${uploads[@]}"
+  """
+}
