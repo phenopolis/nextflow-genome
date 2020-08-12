@@ -38,7 +38,7 @@ process 'horizontal_split' {
     val(sampleId) from Input_ch
     path("*") from Bed_ch
   output:
-    path("*.vcf.gz") into Horizontal_split_ch
+    path("${sampleId}.*.vcf.gz") into Horizontal_split_ch
 
   """
   source s3.bash
@@ -91,7 +91,7 @@ process 'cadd' {
 Merge_cadd_input_ch = Cadd_ch.groupTuple()
 
 process 'merge_cadd' {
-  tag "{$sampleId}"
+  tag "${sampleId}"
   cpus 1
   label 'small_batch'
   memory '7 G'
@@ -101,7 +101,7 @@ process 'merge_cadd' {
     tuple val(sampleId), path("*") from Merge_cadd_input_ch
 
   output:
-    tuple val(sampleId), path("cadd.tsv.gz"), path("cadd.tsv.gz.tbi") into Merged_cadd_output_ch
+    tuple sampleId, path("cadd.tsv.gz"), path("cadd.tsv.gz.tbi") into Merged_cadd_output_ch
 
   """
   infiles=(\$(ls *.gz))
@@ -115,7 +115,8 @@ process 'merge_cadd' {
   """
 
 }
-Vep_in_ch = Vep_input_ch.join(Merged_cadd_output_ch)
+
+//Vep_in_ch = Vep_input_ch.join(Merged_cadd_output_ch)
 
 vep_human_ref_bundle = "${human_ref}.gz ${human_ref}.fai"
 
@@ -137,9 +138,9 @@ process 'vep' {
   publishDir '.'
 
   input:
-    tuple val(sampleId), path(input_cadd), path(cadd_index) from Vep_in_ch
+    tuple val(sampleId), path(input_cadd), path(cadd_index) from Merged_cadd_output_ch
   output:
-    tuple sampleId, path "vep.json" into Vep_ch
+    tuple sampleId, path("vep.json") into Vep_ch
 
   script:
     def plugin_names = '"' + PLUGIN_NAMES.join('" "') + '"'
@@ -219,7 +220,7 @@ process 'hom_het' {
   memory '8 G'
   container params.python_docker
   input:
-    tuple val(sampleId), path(in_json) into Vep_ch
+    tuple val(sampleId), path(in_json) from Vep_ch
   
   """
   cat ${in_json} | python /script/vepjson2tsv.py \
