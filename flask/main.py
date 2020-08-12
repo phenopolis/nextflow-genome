@@ -15,11 +15,12 @@ with open('config.yml', 'rt') as inf:
 app = Flask(__name__)
 CORS(app)
 
-COMPONENTS = {
-    1: 'align',
-    2: 'variantCall',
-    3: 'annotation',
-}
+COMPONENTS = (
+    'align',
+    'variantCall',
+    'annotation',
+    'exomiser',
+)
 
 
 weblogs = {}
@@ -29,12 +30,14 @@ def launcher(params):
     now = datetime.today().strftime('%Y-%m-%d-%H-%M-%S')
     report_dir = os.path.join(params['report_dir_base'], now)
     os.makedirs(report_dir, exist_ok=True)
-    for do_what in ('align', 'variantCall', 'annotation'):
+    for do_what in COMPONENTS:
         if do_what in what_to_do:
+            print(f"do {do_what}")
             wd = os.path.join(cwd, '..', do_what)
-            cmd = ['nextflow', '-C', os.path.join(wd, 'nextflow.config'), '-log', f"{report_dir}/nextflow-{do_what}.log", 'run', os.path.join(wd, f'{do_what}.nf'), '--input_table', params['input_table'], '-bucket-dir', f"{params['bucket_dir_base']}/{now}/{do_what}", '-with-report', f"{report_dir}/ report-{do_what}.html", '-with-weblog', f"{params['web_log_url']}/{params['job_id']}", "-resume"]
+            cmd = ['nextflow', '-C', os.path.join(wd, 'nextflow.config'), '-log', f"{report_dir}/nextflow-{do_what}.log", 'run', os.path.join(wd, f'{do_what}.nf'), '--input_table', params['input_table'], '-bucket-dir', f"{params['bucket_dir_base']}/{do_what}", '-with-report', f"{report_dir}/ report-{do_what}.html", '-with-weblog', f"{params['web_log_url']}/{params['job_id']}", "-resume"]
             subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr).communicate()
-    requests.post(f"{params['web_log_url']}/{params['job_id']}", json={'status': 'done', 'message': f"reports can be found at {report_dir}"})f"reports can be found at {report_dir}f"reports can be found at {report_dir}f"reports can be found at {report_dir}f"reports can be found at {report_dir}f"reports can be found at {report_dir}f"reports can be found at {report_dir}f"reports can be found at {report_dir}f"reports can be found at {report_dir}f"reports can be found at {report_dir}"
+            print(f"{do_what} complete")
+    requests.post(f"{params['web_log_url']}/{params['job_id']}", json={'status': 'done', 'message': f"reports can be found at {report_dir}"})
 
 @app.route("/run", methods = ['POST'])
 @cross_origin()
@@ -42,7 +45,7 @@ def launch():
     data = request.form
     if not {'do', 'input_table'}.issubset(set(data.keys())):
         # needs better error handle
-        return 'Error: needs both do: [align, variantCall, annotation] and input_table'
+        return f"Error: needs both do: [{', '.join(COMPONENTS)}] and input_table"
     params.update(data)
     params['job_id'] = uuid.uuid4()
     Thread(target=launcher, args=(params, )).start()
