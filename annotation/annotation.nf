@@ -24,7 +24,7 @@ human_ref = "${human_ref_base}.fasta"
 //  .splitCsv(header:['sampleId', 'read1', 'read2'], sep:',')
 //  .map{ row -> tuple(row.sampleId, "${params.input_path}/${row.sampleId}/${params.input_filename}",  "${params.input_path}/${row.sampleId}/${params.input_filename}.tbi") }
 Channel.fromList(file(params.input_table).readLines().collect{ it -> it.tokenize(',')[0]})
-  .into {Input_ch; Vep_input_ch}
+  .set {Input_ch}
 
 Bed_ch = Channel.value(file("${params.input_beds}/*.bed"))
 
@@ -39,13 +39,13 @@ process 'horizontal_split' {
     path("*") from Bed_ch
   output:
     path("${sampleId}.*.vcf.gz") into Horizontal_split_ch
+    tuple sampleId, path(params.input_filename), path("${params.input_filename}.tbi") into Normalise_input_ch
 
   """
   source s3.bash
 
   aws_profile="${params.s3_deposit_profile}"
   downloads=()
-  input_bam=
   for filename in ${params.input_filename} ${params.input_filename}.tbi; do
       cloudFile=${params.s3_deposit}/${sampleId}/\$filename
       downloads+=("nxf_s3_retry nxf_s3_download \$cloudFile \$filename")
@@ -116,9 +116,39 @@ process 'merge_cadd' {
 
 }
 
-//Vep_in_ch = Vep_input_ch.join(Merged_cadd_output_ch)
-
+/*
+vep doesn't work well with non-normalised vcf
+*/
 vep_human_ref_bundle = "${human_ref}.gz ${human_ref}.fai"
+process 'normalise' {
+  tag "${sampleId}"
+  cpus 1
+  label 'SSD'
+  memory '8 G'
+  container params.bcftools_docker
+  input:
+    tuple val(sampleId), path(input_vcf), path(input_vcf_index) from Normalise_input_ch
+  output:
+    tuple sampleId, path("normalised.vcf.gz") into Vep_input_ch
+
+  script:
+  """
+  source s3.bash
+
+  aws_profile="${params.aws_ref_profile}"
+  downloads=()
+  # human_refs
+  for downfile in ${vep_human_ref_bundle}
+  do
+    downloads+=("nxf_s3_retry nxf_s3_download ${human_ref_path}/\$downfile ./\$downfile")
+  done
+  nxf_parallel "\${downloads[@]}"
+  gunzip ${human_ref}.gz
+
+  bcftools norm -Ou -m -any ${input_vcf} | bcftools norm -Oz -f ${human_ref} -o normalised.vcf.gz
+  """
+}
+Vep_in_ch = Vep_input_ch.join(Merged_cadd_output_ch)
 
 PLUGIN_NAMES = params.vep_plugins.collect { it -> it.name }
 PLUGIN_LOCALS = params.vep_plugins.collect { it -> it.local }
@@ -135,10 +165,9 @@ process 'vep' {
   //errorStrategy 'retry'
   //maxRetries 2
   container params.vep_docker
-  publishDir '.'
 
   input:
-    tuple val(sampleId), path(input_cadd), path(cadd_index) from Merged_cadd_output_ch
+    tuple val(sampleId), path(input_vcf), path(input_cadd), path(cadd_index) from Vep_in_ch
   output:
     tuple sampleId, path("vep.json") into Vep_ch
 
@@ -168,10 +197,7 @@ process 'vep' {
       downloads+=("nxf_s3_retry nxf_s3_download ${human_ref_path}/\$downfile ./\$downfile")
     done
     # vcf input
-    for filename in ${params.input_filename} ${params.input_filename}.tbi; do
-      cloudFile=${params.s3_deposit}/${sampleId}/\$filename
-      downloads+=("nxf_s3_retry nxf_s3_download \$cloudFile \$filename")
-    done
+    tabix -p vcf ${input_vcf}
 
     nxf_parallel "\${downloads[@]}"
 
@@ -201,9 +227,9 @@ process 'vep' {
       localfile=\${annotation_locals[\$ind]}
       annotations="\${annotations} --custom \${localfile},\${annotation_annotations[\$ind]}"
     done
-    annotations="\${annotations} --custom ${params.input_filename},input,vcf,exact,0,${params.SELF_INFO_FIELDS}"
+    annotations="\${annotations} --custom ${input_vcf},input,vcf,exact,0,${params.SELF_INFO_FIELDS}"
 
-    vep -i ${params.input_filename} ${params.vep_flags} --fork ${params.vep_threads} --dir /data/.vep --dir_cache /data/.vep --fasta ${human_ref} -a ${params.build} \$annotations \$plugins -o vep.json
+    vep -i ${input_vcf} ${params.vep_flags} --fork ${params.vep_threads} --dir /data/.vep --dir_cache /data/.vep --fasta ${human_ref} -a ${params.build} \$annotations \$plugins -o vep.json
     
     gzip -c vep.json > vep.json.gz
     uploads=("nxf_s3_retry nxf_s3_upload vep.json.gz ${params.s3_deposit}/${sampleId}")
@@ -211,28 +237,4 @@ process 'vep' {
     nxf_parallel "\${uploads[@]}"
 
     """
-}
-
-process 'hom_het' {
-  tag "${sampleId}"
-  cpus 4
-  label 'small_batch'
-  memory '8 G'
-  container params.python_docker
-  input:
-    tuple val(sampleId), path(in_json) from Vep_ch
-  
-  """
-  cat ${in_json} | python /script/vepjson2tsv.py \
-    | tee >(grep '^>HOM:' | sed 's/^>HOM://' > HOM.tsv ) \
-    >(grep '^>HET:' | sed 's/^>HET://' > HET.tsv ) \
-    >(grep '^>VAR:' | sed 's/^>VAR://' > VAR.tsv)
-
-  uploads=()
-  for f in HOM.tsv HET.tsv VAR.tsv; do
-    uploads+=("nxf_s3_retry nxf_s3_upload \$f ${params.s3_deposit}/${sampleId}")
-  done
-  aws_profile="${params.s3_deposit_profile}"
-  nxf_parallel "\${uploads[@]}"
-  """
 }
