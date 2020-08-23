@@ -238,3 +238,29 @@ process 'vep' {
 
     """
 }
+
+process 'hom_het' {
+  tag "${sampleId}"
+  cpus 4
+  label 'small_batch'
+  memory '8 G'
+  container params.python_docker
+  input:
+    tuple val(sampleId), path(in_json) from Vep_ch
+  
+  """
+  source s3.bash
+  cat ${in_json} | python3 /script/vepjson2tsv.py \
+    | tee >(grep '^>HOM:' | sed 's/^>HOM://' > HOM.tsv ) \
+    >(grep '^>HET:' | sed 's/^>HET://' > HET.tsv ) \
+    >(grep '^>VAR:' | sed 's/^>VAR://' > VAR.tsv)
+
+  uploads=()
+  for f in HOM.tsv HET.tsv VAR.tsv; do
+    uploads+=("nxf_s3_retry nxf_s3_upload \$f ${params.s3_deposit}/${sampleId}")
+  done
+  aws_profile="${params.s3_deposit_profile}"
+  nxf_parallel "\${uploads[@]}"
+  """
+}
+
