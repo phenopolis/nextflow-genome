@@ -120,7 +120,7 @@ process 'filterCNNVariants' {
   input:
     tuple val(sampleId), path(input_vcf) from CNN_ch
   output:
-    tuple val(sampleId), path("CNN.filtered.vcf.gz"), path("CNN.filtered.vcf.gz.tbi") into Filter_ch
+    tuple sampleId, path("CNN.filtered.vcf.gz"), path("CNN.filtered.vcf.gz.tbi") into Filter_ch
   
   """
   source s3.bash
@@ -136,10 +136,10 @@ process 'filterCNNVariants' {
         --snp-tranche ${params.CNN_filter_snp_tranche} \
         --indel-tranche ${params.CNN_filter_indel_tranche}
   # upload
-  aws_profile="${params.output_path_profile}"
+  aws_profile="${params.s3_deposit_profile}"
   uploads=()
-  uploads+=("nxf_s3_retry nxf_s3_upload CNN.filtered.vcf.gz ${params.output_path}/${params.cohort_name}")
-  uploads+=("nxf_s3_retry nxf_s3_upload CNN.filtered.vcf.gz.tbi ${params.output_path}/${params.cohort_name}")
+  uploads+=("nxf_s3_retry nxf_s3_upload CNN.filtered.vcf.gz ${params.s3_deposit}/${sampleId}")
+  uploads+=("nxf_s3_retry nxf_s3_upload CNN.filtered.vcf.gz.tbi ${params.s3_deposit}/${sampleId}")
   nxf_parallel "\${uploads[@]}"
   """
 }

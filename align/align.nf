@@ -275,8 +275,8 @@ process '1F_ApplyBQSR' {
 
   aws_profile="${params.output_path_profile}"
   uploads=()
-  uploads+=("nxf_s3_retry nxf_s3_upload bqsr.bam ${params.output_path}/${params.cohort_name}")
-  uploads+=("nxf_s3_retry nxf_s3_upload bqsr.bam.bai ${params.output_path}/${params.cohort_name}")
+  uploads+=("nxf_s3_retry nxf_s3_upload bqsr.bam ${params.s3_deposit}/${sampleId}")
+  uploads+=("nxf_s3_retry nxf_s3_upload bqsr.bam.bai ${params.s3_deposit}/${sampleId}")
   nxf_parallel "\${uploads[@]}"
   """
 }
