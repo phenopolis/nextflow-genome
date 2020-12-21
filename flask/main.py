@@ -35,7 +35,11 @@ def launcher(params):
             print(f"do {do_what}")
             wd = os.path.join(cwd, '..', do_what)
             cmd = ['nextflow', '-C', os.path.join(wd, 'nextflow.config'), '-log', f"{report_dir}/nextflow-{do_what}.log", 'run', os.path.join(wd, f'{do_what}.nf'), '--input_table', params['input_table'], '-bucket-dir', f"{params['bucket_dir_base']}/{do_what}", '-with-report', f"{report_dir}/ report-{do_what}.html", '-with-weblog', f"{params['web_log_url']}/{params['job_id']}", "-resume"]
-            subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr).communicate()
+            p = subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr)
+            output, error = p.communicate()
+            if p.returncode != 0:
+                print(f"ERROR: {do_what} failed with {p.returncode}: {error}")
+                break
             print(f"{do_what} complete")
     requests.post(f"{params['web_log_url']}/{params['job_id']}", json={'status': 'done', 'message': f"reports can be found at {report_dir}"})
 
