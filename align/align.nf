@@ -90,11 +90,16 @@ process '1A_align' {
   done
   # copy fastq
   aws_profile="${params.fastq_path_profile}"
-  downloads+=("nxf_s3_retry nxf_s3_download ${params.fastq_path}/${read1} ./${read1}")
-  downloads+=("nxf_s3_retry nxf_s3_download ${params.fastq_path}/${read2} ./${read2}")
+  local_read1=${read1}
+  local_read2=${read2}
+  local_read1=\${local_read1##*/}
+  local_read2=\${local_read2##*/}
+  downloads+=("nxf_s3_retry nxf_s3_download ${read1} ./\${local_read1}")
+  downloads+=("nxf_s3_retry nxf_s3_download ${read2} ./\${local_read2}")
   nxf_parallel "\${downloads[@]}"
+  ls -alh
 
-  bwa mem -K 100000000 -v 3 -t 20 -Y ${human_ref} ${read1} ${read2} 2> >(tee bwa.stderr.log >&2) \
+  bwa mem -K 100000000 -v 3 -t 20 -Y ${human_ref} \${local_read1} \${local_read2} 2> >(tee bwa.stderr.log >&2) \
     | \
   samtools view -1 - > raw.bam
   """
@@ -107,6 +112,7 @@ process '1B_mark_duplicate' {
   tag "$sampleId"
   memory '20 GB'
   container params.gatk_docker
+  label 'SSD'
   cpus 4
   containerOptions '-m 14g'
   input:
@@ -134,7 +140,10 @@ process '1B_mark_duplicate' {
  */
 process '1C_addGroup' {
   tag "$sampleId"
+  cpus 1
+  memory '8 GB'
   container params.picard_docker
+  label 'small_batch'
 
   input:
     tuple val(sampleId), path(input_bam) from Mark_duplicate_ch
@@ -160,6 +169,7 @@ process '1D_sort' {
   tag "$sampleId"
   memory '30 G'
   container params.gatk_docker
+  label 'SSD'
   containerOptions '-m 20g'
   input:
     tuple val(sampleId), path(input_bam) from Group_bam_ch
@@ -189,6 +199,7 @@ Sorted_bam_ch.into {Sorted_bam_ch1; Sorted_bam_ch2}
  */
 process '1E_BQSR' {
   tag "$sampleId"
+  label 'SSD'
   memory '12 G'
   container params.gatk_docker
   input:
@@ -212,7 +223,9 @@ process '1E_BQSR' {
       downloads+=("nxf_s3_retry nxf_s3_download ${gatk_bundle}/\${downfile}.idx ./\${downfile}.idx")
     fi
   done
+  nxf_parallel "\${downloads[@]}"
   # copy human_ref
+  downloads=()
   aws_profile="${params.aws_ref_profile}"
   for downfile in ${human_ref_bundle}
   do
@@ -242,6 +255,7 @@ process '1E_BQSR' {
 process '1F_ApplyBQSR' {
   tag "$sampleId"
   memory '10 G'
+  label 'SSD'
   container params.gatk_docker
   //publishDir './bam'
   input:
@@ -273,7 +287,7 @@ process '1F_ApplyBQSR' {
       --use-original-qualities
   samtools index bqsr.bam
 
-  aws_profile="${params.output_path_profile}"
+  aws_profile="${params.s3_deposit_profile}"
   uploads=()
   uploads+=("nxf_s3_retry nxf_s3_upload bqsr.bam ${params.s3_deposit}/${sampleId}")
   uploads+=("nxf_s3_retry nxf_s3_upload bqsr.bam.bai ${params.s3_deposit}/${sampleId}")
